@@ -5,6 +5,8 @@ research. It can collect listings while you browse, run multi-term batch
 scrapes, import older CSV exports, merge everything into one accumulated
 research table, and export the current filtered view.
 
+![iScale Etsy — the Shop View research table alongside the live side-panel collection](docs/screenshot.png)
+
 The goal is simple: give makers, researchers, and builders a useful open-source
 Etsy research tool without requiring a hosted backend, account, or private API.
 
