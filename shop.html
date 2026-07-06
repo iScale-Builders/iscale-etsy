@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Etsy Research — Shop View</title>
+    <style>
+      :root {
+        --bg: #faf8f5;
+        --card: #ffffff;
+        --ink: #222222;
+        --muted: #595959;
+        --line: #e1e3df;
+        --accent: #f1641e;
+        --accent-dark: #cf4f12;
+        --green: #167a3c;
+        --demand: linear-gradient(135deg, #f1641e, #cf4f12);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--ink); }
+
+      /* ---- header ---- */
+      .sticky-controls { position: sticky; top: 0; z-index: 50; background: var(--bg); box-shadow: 0 4px 12px rgba(31,36,33,0.06); }
+      .topbar { background: #fff; border-bottom: 1px solid var(--line); }
+      .topbar::after { content: ""; display: block; height: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 200% 100%; animation: sweep 3.5s linear infinite; }
+      .topbar-inner { max-width: 1300px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 12px 20px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo { width: 38px; height: 38px; border-radius: 11px; background: var(--demand); display: grid; place-items: center; color: #fff; box-shadow: 0 4px 12px rgba(241,100,30,0.35); transition: transform 0.3s ease; }
+      .logo:hover { transform: rotate(-8deg) scale(1.06); }
+      .logo svg { width: 22px; height: 22px; }
+      .brand-name { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.02em; }
+      .brand-name .etsy { color: var(--accent); }
+      .ver { font-size: 0.72rem; font-weight: 600; color: var(--accent); background: #fff3ec; border: 1px solid var(--line); padding: 2px 8px; border-radius: 999px; }
+      .live { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.78rem; color: #167a3c; }
+      .live .dot { width: 9px; height: 9px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); animation: pulse 1.6s infinite; }
+      .pill-count { font-size: 0.9rem; } .pill-count strong { font-weight: 800; }
+      .updated { font-size: 0.85rem; color: var(--muted); }
+      .updated b { color: var(--accent); font-weight: 700; }
+      .spacer { flex: 1 1 20px; }
+      .searchwrap { position: relative; flex: 1 1 280px; min-width: 200px; max-width: 460px; }
+      .searchwrap input { width: 100%; font: inherit; padding: 10px 46px 10px 16px; border: 1px solid var(--line); border-radius: 999px; transition: box-shadow 0.2s ease, border-color 0.2s ease; }
+      .searchwrap input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px rgba(241,100,30,0.14); }
+      .searchwrap .go { position: absolute; right: 5px; top: 5px; width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--demand); color: #fff; display: grid; place-items: center; cursor: pointer; }
+      .suggest { display: flex; align-items: center; gap: 6px; }
+      .suggest label { font-size: 0.82rem; color: var(--muted); }
+      .suggest input { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; width: 150px; }
+      .btn { font: inherit; border: 1px solid var(--accent); background: var(--accent); color: #fff; padding: 9px 16px; border-radius: 8px; cursor: pointer; transition: transform 0.12s ease, background 0.2s ease, box-shadow 0.2s ease; }
+      .btn:hover { background: var(--accent-dark); box-shadow: 0 4px 12px rgba(241,100,30,0.3); transform: translateY(-1px); }
+      .btn:active { transform: translateY(0) scale(0.98); }
+      .btn.ghost { background: #fff; color: var(--accent); }
+      .btn.ghost:hover { background: #fff7f3; box-shadow: none; }
+      .btn.danger { background: #fff; color: #b91c1c; border-color: #e7b7b2; }
+      .btn.danger:hover { background: #fdecea; box-shadow: none; }
+      .file-btn { position: relative; overflow: hidden; }
+      .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+      /* ---- toolbar ---- */
+      .toolbar { max-width: 1300px; margin: 14px auto 6px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 0 20px; }
+      .toolbar select { font: inherit; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer; }
+      .sort-dir { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: #fff; cursor: pointer; font-weight: 700; transition: transform 0.25s ease, color 0.2s ease, border-color 0.2s ease; }
+      .sort-dir.asc { transform: rotate(180deg); color: var(--accent); border-color: var(--accent); }
+      .showing { color: var(--muted); font-size: 0.95rem; } .showing b { color: var(--accent); }
+      .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+      .chip { font: inherit; padding: 8px 16px; border: 1px solid var(--line); background: #fff; border-radius: 999px; cursor: pointer; font-size: 0.85rem; transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease; }
+      .chip:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.06); }
+      .chip.active { position: relative; overflow: hidden; background: var(--demand); color: #fff; border-color: transparent; }
+      .chip.active::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 34%, rgba(255,255,255,0.25) 50%, transparent 66%); background-size: 220% 100%; animation: sweep 2.6s linear infinite; }
+      .filterwrap { display: flex; align-items: center; gap: 6px; } .filterwrap label { font-size: 0.85rem; color: var(--muted); }
+      .filterwrap input { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+
+      /* ---- grid + cards ---- */
+      .shell { max-width: 1300px; margin: 0 auto; padding: 14px 20px 64px; }
+      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; }
+      @media (max-width: 1100px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+      @media (max-width: 760px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+      .product-card { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; opacity: 0; transform: translateY(14px); animation: cardIn 0.5s ease forwards; transition: transform 0.18s ease, box-shadow 0.18s ease; }
+      .product-card:hover { transform: translateY(-5px); box-shadow: 0 16px 34px rgba(31,36,33,0.14); }
+      .product-card::before { content: ""; position: absolute; inset: 0; border: 2px solid transparent; border-radius: 18px; pointer-events: none; z-index: 4; transition: border-color 0.2s ease; }
+      .product-card:hover::before { border-color: rgba(241,100,30,0.4); }
+      .product-card.unavailable .product-image { filter: grayscale(0.85); opacity: 0.55; }
+      .card-link { position: absolute; inset: 0; z-index: 2; }
+      .product-image-container { position: relative; aspect-ratio: 1 / 1; background: #f1ede6; overflow: hidden; }
+      .product-image { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.4s ease; }
+      .product-image--ph { display: grid; place-items: center; background: #f1ede6; color: #c4bcae; }
+      .product-image--ph svg { width: 38%; height: 38%; }
+      .product-card:hover .product-image--ph { transform: none; }
+      .product-card:hover .product-image { transform: scale(1.06); }
+      .unavailable-badge { position: absolute; top: 8px; right: 8px; z-index: 3; background: rgba(31,36,33,0.82); color: #fff; font-size: 0.66rem; padding: 4px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+      /* demand badge: TOP-LEFT, with glimmer */
+      .demand-badge { position: absolute; top: 8px; left: 8px; z-index: 3; display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; background: var(--demand); color: #fff; font-size: 0.8rem; font-weight: 600; padding: 6px 10px; border-radius: 10px; box-shadow: 0 4px 10px rgba(207,79,18,0.4); max-width: calc(100% - 16px); overflow: hidden; }
+      .demand-badge::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 38%, rgba(255,255,255,0.28) 50%, transparent 62%); background-size: 220% 100%; animation: sweep 3.4s linear infinite; }
+      .demand-badge .demand-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; transition: opacity 0.3s ease; }
+      .demand-badge .demand-time { font-size: 0.6rem; opacity: 0.9; transition: opacity 0.3s ease; }
+      .demand-text.fading, .demand-time.fading { opacity: 0; }
+
+      /* type badge: BOTTOM-LEFT */
+      .type-badge { position: absolute; bottom: 8px; left: 8px; z-index: 3; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: rgba(255,255,255,0.94); color: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,0.14); transition: transform 0.2s ease; }
+      .product-card:hover .type-badge { transform: scale(1.08); }
+      .type-badge.digital { color: var(--accent); }
+      .type-badge svg { width: 17px; height: 17px; }
+
+      /* download: bottom-right, reveal on hover */
+      .download-btn { position: absolute; bottom: 8px; right: 8px; z-index: 3; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 9px; background: rgba(255,255,255,0.94); color: var(--accent); opacity: 0; transform: translateY(4px); transition: opacity 0.2s ease, transform 0.2s ease, color 0.2s ease; }
+      .product-card:hover .download-btn { opacity: 1; transform: none; }
+      .download-btn:hover { color: var(--accent-dark); }
+      .download-btn svg { width: 16px; height: 16px; }
+
+      .product-info { padding: 13px 15px 17px; }
+      .product-title { font-size: 1rem; font-weight: 600; line-height: 1.38; max-height: 2.76em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+      .product-price { margin-top: 9px; font-size: 1.05rem; font-weight: 800; color: var(--green); }
+      .product-price .lbl { font-weight: 600; color: var(--muted); }
+      .product-meta { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 0.86rem; font-weight: 500; }
+      .product-meta svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; }
+      .product-favorites svg { color: #ef4444; }
+      .product-reviews { color: #7c3aed; }
+      .product-first-review { color: var(--green); }
+      .demand-dots { display: flex; gap: 4px; margin-top: 10px; }
+      .demand-dot { width: 6px; height: 6px; border-radius: 50%; background: #d8d2c8; transition: background 0.3s ease, transform 0.3s ease; }
+      .demand-dot.active { background: var(--accent); transform: scale(1.3); }
+
+      .empty { text-align: center; color: var(--muted); padding: 80px 20px; }
+      .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 28px; }
+      .pagination button { font: inherit; padding: 9px 16px; border: 1px solid var(--line); background: #fff; border-radius: 10px; cursor: pointer; transition: border-color 0.2s ease, transform 0.12s ease; }
+      .pagination button:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
+      .pagination button:disabled { opacity: 0.45; cursor: default; }
+      .page-info { font-size: 0.9rem; color: var(--muted); }
+
+      @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); } 70% { box-shadow: 0 0 0 7px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+      @keyframes sweep { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+      @keyframes cardIn { to { opacity: 1; transform: none; } }
+    </style>
+  </head>
+  <body>
+    <div class="sticky-controls">
+    <div class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l5-5 4 4 8-9"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 7v5h-5"/></svg></span>
+          <span class="brand-name">Etsy <span class="etsy">Research</span></span>
+          <span class="ver" id="appVersion"></span>
+        </div>
+        <span class="live"><span class="dot"></span>LIVE</span>
+        <span class="pill-count"><strong id="brandCount">0</strong> Products</span>
+        <span class="updated"><b id="updatedAt">Just now</b> Updated</span>
+        <span class="spacer"></span>
+        <span class="searchwrap">
+          <input id="search" type="search" placeholder="Search products (comma-separate for multiple)…" />
+          <button class="go" id="searchGo" type="button" aria-label="Search"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path stroke-linecap="round" d="M21 21l-4.3-4.3"/></svg></button>
+        </span>
+        <span class="suggest">
+          <label for="suggest">Queue search:</label>
+          <input id="suggest" type="text" placeholder="corgi tshirt, dog mom… (comma-separate)" />
+          <button class="btn" id="suggestSubmit" type="button">Add to queue</button>
+        </span>
+        <label class="btn ghost file-btn">Import CSV<input id="importCsv" type="file" accept=".csv,text/csv" multiple /></label>
+        <button class="btn" id="exportCsv" type="button">Export CSV</button>
+        <button class="btn danger" id="clearListings" type="button" title="Delete all collected listings (your search terms and queue are kept)">Clear listings</button>
+      </div>
+    </div>
+
+    <section class="toolbar">
+      <span style="color:var(--muted)">Sort by:</span>
+      <select id="sort" aria-label="Sort by">
+        <option value="newest">Recent</option>
+        <option value="demand" selected>Demand</option>
+        <option value="reviews">Reviews</option>
+        <option value="first_review">1st Review</option>
+        <option value="price">Price</option>
+        <option value="favorites">Favorites</option>
+      </select>
+      <button id="sortDir" class="sort-dir" title="Toggle sort direction" aria-label="Toggle sort direction">↓</button>
+      <span class="showing" id="showing">Showing 0 of 0 products</span>
+      <span class="chips" id="chips" role="group" aria-label="Demand filters">
+        <button class="chip active" data-chip="all" type="button">All Products</button>
+        <button class="chip" data-chip="in_carts" type="button">In Carts</button>
+        <button class="chip" data-chip="views" type="button">Views</button>
+        <button class="chip" data-chip="selling_fast" type="button">Selling Fast</button>
+      </span>
+      <span class="filterwrap">
+        <label for="demandFilter">Filter:</label>
+        <input id="demandFilter" type="text" placeholder="e.g. 20+ bought, 10 carts…" />
+      </span>
+    </section>
+    </div>
+
+    <div class="shell">
+      <p id="status" class="status" style="color:var(--muted);font-size:.82rem;margin:0 0 10px"></p>
+      <section id="grid" class="grid" aria-live="polite"></section>
+      <div id="empty" class="empty" hidden>No products found. Scrape some Etsy pages or import a CSV.</div>
+      <div class="pagination" id="pagination" hidden>
+        <button id="prevBtn" type="button">‹ Prev</button>
+        <span class="page-info" id="pageInfo">Page 1 of 1</span>
+        <button id="nextBtn" type="button">Next ›</button>
+      </div>
+    </div>
+    <script type="module" src="shop.js"></script>
+  </body>
+</html>
