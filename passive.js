@@ -11,6 +11,13 @@
     if (RD_DEBUG) console.log(...args);
   };
 
+  const reviewDateUtils = globalThis.iScaleReviewDateUtils;
+  if (!reviewDateUtils) {
+    console.warn("[iScale Etsy] review-date-utils.js did not load; passive extraction disabled.");
+    return;
+  }
+  const { extractReviewDatesFromArea, hasReviewDate } = reviewDateUtils;
+
   // Message the service worker, tolerating an invalidated extension context — after an
   // extension reload/update this content script keeps running in the page but its
   // chrome.runtime is dead; sendMessage then throws SYNCHRONOUSLY ("Extension context
@@ -162,13 +169,9 @@
       document.querySelector('[data-appears-component-name="listing_page_reviews"]') ||
       document.querySelector('[id*="review"]');
     if (!region) return { firstReview: "", lastReview: "" };
-    const text = region.innerText || "";
-    const matches = text.match(/[A-Z][a-z]{2} \d{1,2}, \d{4}|\d{1,2} [A-Z][a-z]{2}, \d{4}/g);
-    if (!matches || matches.length === 0) return { firstReview: "", lastReview: "" };
-    const dates = matches.map((d) => new Date(d)).filter((d) => !Number.isNaN(d.getTime()));
+    const dates = extractReviewDatesFromArea(region);
     if (dates.length === 0) return { firstReview: "", lastReview: "" };
-    dates.sort((a, b) => a - b);
-    return { firstReview: dates[0].toISOString().slice(0, 10), lastReview: dates[dates.length - 1].toISOString().slice(0, 10) };
+    return { firstReview: dates[0], lastReview: dates[dates.length - 1] };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -474,35 +477,24 @@ function extractStaticReviewDates() {
 
   if (!reviewSection) {
     rdLog("[Review Dates] No review section found for static extraction");
-    // Fallback: try to find dates anywhere in the page with review context
-    const allText = document.body.innerText;
-    const dateRegex = /[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g;
-    const allDates = allText.match(dateRegex);
-    rdLog("[Review Dates] Fallback dates found in page:", allDates?.length || 0);
     return result;
   }
 
-  const dateRegex = /[A-Z][a-z]{2} \d{1,2}, \d{4}|\d{1,2} [A-Z][a-z]{2}, \d{4}/g;
-  const textContent = reviewSection.innerText;
-  const foundDates = textContent.match(dateRegex);
+  const foundDates = extractReviewDatesFromArea(reviewSection);
   rdLog(
     "[Review Dates] Static: dates found in section:",
-    foundDates?.length || 0,
+    foundDates.length,
     foundDates,
   );
 
-  if (foundDates && foundDates.length > 0) {
-    const parsedDates = foundDates.map((d) => new Date(d)).filter((d) => !isNaN(d));
-    if (parsedDates.length > 0) {
-      parsedDates.sort((a, b) => a - b);
-      result.firstReviewDate = parsedDates[0].toISOString().slice(0, 10);
-      result.lastReviewDate = parsedDates[parsedDates.length - 1].toISOString().slice(0, 10);
-      rdLog(
-        `[Review Dates] Static extraction found dates: first=${result.firstReviewDate}, last=${result.lastReviewDate}`,
-      );
-    }
+  if (foundDates.length > 0) {
+    result.firstReviewDate = foundDates[0];
+    result.lastReviewDate = foundDates[foundDates.length - 1];
+    rdLog(
+      `[Review Dates] Static extraction found dates: first=${result.firstReviewDate}, last=${result.lastReviewDate}`,
+    );
   } else {
-    rdLog("[Review Dates] Static: No dates matched regex in review section");
+    rdLog("[Review Dates] Static: No valid dates found in review section");
   }
 
   return result;
@@ -812,7 +804,7 @@ async function openReviewsModal() {
   for (const el of postClickDialogs) {
     if (!preClickDialogs.has(el) && el.offsetParent !== null) {
       const text = el.innerText || "";
-      if (/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/.test(text) || /review/i.test(text)) {
+      if (hasReviewDate(el) || /review/i.test(text)) {
         rdLog("[Review Dates] Modal detected via post-click DOM diff");
         return true;
       }
@@ -822,8 +814,7 @@ async function openReviewsModal() {
   // Last resort: check if review dates appeared in inline reviews section
   const reviewSection = document.getElementById("reviews") || document.querySelector('[data-selector="reviews-region"]');
   if (reviewSection) {
-    const dateRegex = /[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/;
-    if (dateRegex.test(reviewSection.innerText || "")) {
+    if (hasReviewDate(reviewSection)) {
       rdLog("[Review Dates] No modal, but reviews section has dates (inline reviews)");
       return true;
     }
@@ -845,8 +836,7 @@ function getReviewsModalArea() {
     try {
       const sheet = document.querySelector(selector);
       if (sheet && sheet.offsetParent !== null) {
-        const text = sheet.innerText || "";
-        if (/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/.test(text)) {
+        if (hasReviewDate(sheet)) {
           rdLog("[Review Dates] Found reviews in wt-sheet/deep-dive-sheet");
           return sheet;
         }
@@ -870,8 +860,7 @@ function getReviewsModalArea() {
     try {
       const modal = document.querySelector(selector);
       if (modal && modal.offsetParent !== null) {
-        const text = modal.innerText || "";
-        if (/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/.test(text)) {
+        if (hasReviewDate(modal)) {
           return modal;
         }
       }
@@ -886,7 +875,7 @@ function getReviewsModalArea() {
   for (const overlay of allOverlays) {
     if (overlay.offsetParent !== null) {
       const text = overlay.innerText || "";
-      if (/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/.test(text) && !text.includes("Add to cart")) {
+      if (hasReviewDate(overlay) && !text.includes("Add to cart")) {
         return overlay;
       }
     }
@@ -903,8 +892,7 @@ function getReviewsModalArea() {
     document.getElementById("same-listing-reviews") ||
     document.querySelector('[data-selector="reviews-region"]');
   if (reviewsSection) {
-    const text = reviewsSection.innerText || "";
-    if (/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/.test(text)) {
+    if (hasReviewDate(reviewsSection)) {
       rdLog("[Review Dates] Using inline reviews section instead of modal");
       return reviewsSection;
     }
@@ -924,46 +912,16 @@ function extractFirstVisibleReviewDate() {
     modal ? "modal" : "document",
   );
 
-  // Look for date elements in reviews
-  const dateSelectors = [
-    ".review-date",
-    ".wt-text-caption",
-    "[data-review-date]",
-    ".wt-text-gray",
-    "time[datetime]",
-    ".wt-text-body-01",
-    "p.wt-text-caption",
-  ];
-
-  for (const selector of dateSelectors) {
-    const elements = searchArea.querySelectorAll(selector);
-    for (const dateEl of elements) {
-      const text = dateEl.innerText?.trim() || dateEl.getAttribute("datetime") || "";
-      const dateMatch = text.match(/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/);
-      if (dateMatch) {
-        rdLog(
-          "[Review Dates] extractFirstVisible: found date via selector",
-          selector,
-          ":",
-          dateMatch[0],
-        );
-        return dateMatch[0];
-      }
-    }
-  }
-
-  // Fallback: regex search in entire modal/page text
-  const text = searchArea.innerText || "";
-  const dateRegex = /[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g;
-  const matches = text.match(dateRegex);
+  const matches = extractReviewDatesFromArea(searchArea);
   rdLog(
-    "[Review Dates] extractFirstVisible: fallback regex found",
-    matches?.length || 0,
+    "[Review Dates] extractFirstVisible: found",
+    matches.length,
     "dates",
   );
-  if (matches && matches.length > 0) {
-    rdLog("[Review Dates] extractFirstVisible: returning", matches[0]);
-    return matches[0];
+  if (matches.length > 0) {
+    const newest = matches[matches.length - 1];
+    rdLog("[Review Dates] extractFirstVisible: returning", newest);
+    return newest;
   }
 
   rdLog("[Review Dates] extractFirstVisible: NO DATES FOUND");
@@ -974,23 +932,8 @@ function extractFirstVisibleReviewDate() {
 function extractLastVisibleReviewDate() {
   const modal = getReviewsModalArea();
   const searchArea = modal || document;
-  const text = searchArea.innerText || "";
-
-  const dateRegex = /[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g;
-  const matches = text.match(dateRegex);
-  if (matches && matches.length > 0) {
-    // Sort dates to find actual oldest
-    const parsedDates = matches
-      .map((d) => ({ str: d, date: new Date(d) }))
-      .filter((d) => !isNaN(d.date))
-      .sort((a, b) => a.date - b.date);
-
-    if (parsedDates.length > 0) {
-      return parsedDates[0].str;
-    }
-  }
-
-  return null;
+  const matches = extractReviewDatesFromArea(searchArea);
+  return matches[0] || null;
 }
 
 // Helper: Find highest visible page number button
@@ -1019,10 +962,7 @@ function findHighestPageButton(searchArea) {
 function getVisibleDatesSnapshot() {
   const modal = getReviewsModalArea();
   const searchArea = modal || document;
-  const text = searchArea.innerText || "";
-  const dateRegex = /[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g;
-  const matches = text.match(dateRegex);
-  return matches ? matches.join("|") : "";
+  return extractReviewDatesFromArea(searchArea).join("|");
 }
 
 function getPaginationSnapshot() {
@@ -1338,8 +1278,7 @@ async function extractReviewDates(forceModal = false) {
 
     // Capture raw dates visible on page 1 of modal
     const page1SearchArea = modalArea || document;
-    const page1Text = page1SearchArea.innerText || "";
-    const page1DateMatches = page1Text.match(/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g) || [];
+    const page1DateMatches = extractReviewDatesFromArea(page1SearchArea);
     result.audit.raw_dates_page1 = page1DateMatches.slice(0, 20); // cap at 20 for log size
 
     // Extract most recent review date (page 1)
@@ -1360,8 +1299,7 @@ async function extractReviewDates(forceModal = false) {
 
       // Capture raw dates visible on last page
       const lastPageArea = getReviewsModalArea() || document;
-      const lastPageText = lastPageArea.innerText || "";
-      const lastPageDateMatches = lastPageText.match(/[A-Z][a-z]{2} \d{1,2},? \d{4}|\d{1,2} [A-Z][a-z]{2},? \d{4}/g) || [];
+      const lastPageDateMatches = extractReviewDatesFromArea(lastPageArea);
       result.audit.raw_dates_last_page = lastPageDateMatches.slice(0, 20);
 
       result.firstReviewDate = extractLastVisibleReviewDate();

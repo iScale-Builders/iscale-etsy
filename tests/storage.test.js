@@ -11,6 +11,7 @@ import {
   getAllRecords,
   getAllByIndex,
   bulkPut,
+  bulkDelete,
   countRecords,
   deleteRecord,
   clearStore,
@@ -85,6 +86,18 @@ describe("bulkPut", () => {
     await bulkPut("listings", [{ id: "x", v: 2 }]);
     expect((await getRecord("listings", "x")).v).toBe(2);
     expect(await countRecords("listings")).toBe(1);
+  });
+});
+
+describe("bulkDelete", () => {
+  it("deletes a selected batch in one transaction", async () => {
+    await bulkPut("listings", [{ id: "d1" }, { id: "d2" }, { id: "keep" }]);
+    expect(await bulkDelete("listings", ["d1", "d2"])).toBe(2);
+    expect((await getAllRecords("listings")).map((row) => row.id)).toEqual(["keep"]);
+  });
+
+  it("is a no-op for an empty input", async () => {
+    expect(await bulkDelete("listings", [])).toBe(0);
   });
 });
 

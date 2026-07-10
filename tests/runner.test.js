@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { betweenTermsGate, eligibleTerms, failedToAutoRetry, getJobSearchUrls, makeListingQueueItems, nextRunnerStep, planJobSteps, planTick, recentBlockError, shouldContinueTerm, shouldStartNewCycle } from "../src/core/runner.js";
+import { betweenTermsGate, eligibleTerms, failedToAutoRetry, getJobSearchUrls, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "../src/core/runner.js";
 
 describe("failedToAutoRetry (auto-retry failed URLs when auto-run is idle)", () => {
   const rows = [
@@ -128,66 +128,6 @@ describe("eligibleTerms (auto-run only works terms NOT already done today)", () 
   });
 });
 
-// NOTE: planTick/nextRunnerStep are a RESERVED durable-cursor engine NOT wired into the
-// live runner (background.js uses planJobSteps). These tests cover that future engine, not
-// the shipping runner — see the ⚠️ banner in runner.js. (audit HIGH-2)
-describe("planTick (the alarm engine's pure brain — decides one action from durable state)", () => {
-  const job = (over = {}) => ({ terms: ["a", "b"], pagesPerTerm: 2, searchDone: [], ...over });
-  const row = (url, status, terms) => ({ url, status, terms });
-
-  it("returns done with no job / no terms", () => {
-    expect(planTick({})).toEqual({ type: "done" });
-    expect(planTick({ job: { terms: [] } })).toEqual({ type: "done" });
-  });
-
-  it("discovers the first un-walked page of the first term", () => {
-    expect(planTick({ job: job({ searchDone: [] }) })).toEqual({ type: "discover", term: "a", page: 1 });
-    expect(planTick({ job: job({ searchDone: ["a|1"] }) })).toEqual({ type: "discover", term: "a", page: 2 });
-  });
-
-  it("visits once a term's pages are all walked and it has pending URLs", () => {
-    const j = job({ searchDone: ["a|1", "a|2"] });
-    const urlRows = [row("u1", "pending", ["a"]), row("u2", "done", ["a"])];
-    expect(planTick({ job: j, urlRows })).toEqual({ type: "visit", term: "a" });
-  });
-
-  it("moves to the next term only after the first is fully drained", () => {
-    const j = job({ searchDone: ["a|1", "a|2", "b|1"] });
-    // term a fully walked + nothing pending → advance to b's next page
-    const urlRows = [row("u1", "done", ["a"])];
-    expect(planTick({ job: j, urlRows })).toEqual({ type: "discover", term: "b", page: 2 });
-  });
-
-  it("is done when every term is walked and nothing is pending", () => {
-    const j = job({ searchDone: ["a|1", "a|2", "b|1", "b|2"] });
-    expect(planTick({ job: j, urlRows: [row("u1", "done", ["a"])] })).toEqual({ type: "done" });
-  });
-
-  it("counts a URL's pending status under EACH of its terms (shared listings)", () => {
-    const j = job({ searchDone: ["a|1", "a|2", "b|1", "b|2"] });
-    const urlRows = [row("shared", "pending", ["a", "b"])];
-    // first term with work wins → a
-    expect(planTick({ job: j, urlRows })).toEqual({ type: "visit", term: "a" });
-  });
-
-  it("falls back to searchTerm/term when a row has no terms[] array", () => {
-    const j = job({ terms: ["x"], pagesPerTerm: 1, searchDone: ["x|1"] });
-    expect(planTick({ job: j, urlRows: [{ url: "u", status: "pending", searchTerm: "x" }] })).toEqual({ type: "visit", term: "x" });
-  });
-
-  it("skips cancelled terms", () => {
-    const j = job({ searchDone: ["a|1", "a|2", "b|1", "b|2"] });
-    const urlRows = [row("ua", "pending", ["a"]), row("ub", "pending", ["b"])];
-    expect(planTick({ job: j, urlRows, cancelled: ["a"] })).toEqual({ type: "visit", term: "b" });
-  });
-
-  it("ignores non-pending rows when counting work", () => {
-    const j = job({ terms: ["a"], pagesPerTerm: 1, searchDone: ["a|1"] });
-    const urlRows = [row("u1", "done", ["a"]), row("u2", "failed", ["a"]), row("u3", "processing", ["a"])];
-    expect(planTick({ job: j, urlRows })).toEqual({ type: "done" }); // nothing "pending"
-  });
-});
-
 describe("shouldStartNewCycle (stop auto-run from switching terms mid-run)", () => {
   it("starts a new cycle only when NO job is in flight", () => {
     expect(shouldStartNewCycle([])).toBe(true);
@@ -201,42 +141,6 @@ describe("shouldStartNewCycle (stop auto-run from switching terms mid-run)", () 
   });
   it("tolerates null/garbage job rows", () => {
     expect(shouldStartNewCycle([null, undefined, { status: "completed" }])).toBe(true);
-  });
-});
-
-describe("nextRunnerStep (the alarm-driven runner's durable-cursor brain)", () => {
-  const P = 2;
-  it("returns done when there are no terms", () => {
-    expect(nextRunnerStep({ terms: [], pagesPerTerm: P })).toEqual({ type: "done" });
-  });
-  it("discovers the lowest un-walked page first", () => {
-    expect(nextRunnerStep({ terms: ["a"], pagesPerTerm: P, walkedByTerm: {} })).toEqual({ type: "discover", term: "a", page: 1 });
-    expect(nextRunnerStep({ terms: ["a"], pagesPerTerm: P, walkedByTerm: { a: [1] } })).toEqual({ type: "discover", term: "a", page: 2 });
-  });
-  it("is robust to gaps in walked pages (returns the missing page, not count+1)", () => {
-    expect(nextRunnerStep({ terms: ["a"], pagesPerTerm: 3, walkedByTerm: { a: [1, 3] } })).toEqual({ type: "discover", term: "a", page: 2 });
-  });
-  it("visits only after every page is walked, and while pending remain", () => {
-    expect(nextRunnerStep({ terms: ["a"], pagesPerTerm: P, walkedByTerm: { a: [1, 2] }, pendingByTerm: { a: 5 } })).toEqual({ type: "visit", term: "a" });
-  });
-  it("marks a term finished (all pages walked, nothing pending) and moves to the next term", () => {
-    const step = nextRunnerStep({ terms: ["a", "b"], pagesPerTerm: P, walkedByTerm: { a: [1, 2] }, pendingByTerm: { a: 0 } });
-    expect(step).toEqual({ type: "discover", term: "b", page: 1 });
-  });
-  it("returns done when every term is fully walked with nothing pending", () => {
-    expect(nextRunnerStep({ terms: ["a", "b"], pagesPerTerm: P, walkedByTerm: { a: [1, 2], b: [1, 2] }, pendingByTerm: {} })).toEqual({ type: "done" });
-  });
-  it("respects term order — the first term with work wins", () => {
-    const step = nextRunnerStep({ terms: ["a", "b"], pagesPerTerm: P, walkedByTerm: { a: [1, 2], b: [1, 2] }, pendingByTerm: { a: 1, b: 1 } });
-    expect(step).toEqual({ type: "visit", term: "a" });
-  });
-  it("skips cancelled terms (array or Set)", () => {
-    const args = { terms: ["a", "b"], pagesPerTerm: P, walkedByTerm: { b: [1, 2] }, pendingByTerm: { b: 1 } };
-    expect(nextRunnerStep({ ...args, cancelled: ["a"] })).toEqual({ type: "visit", term: "b" });
-    expect(nextRunnerStep({ ...args, cancelled: new Set(["a"]) })).toEqual({ type: "visit", term: "b" });
-  });
-  it("accepts walkedByTerm as a Set as well as an array", () => {
-    expect(nextRunnerStep({ terms: ["a"], pagesPerTerm: P, walkedByTerm: { a: new Set([1]) } })).toEqual({ type: "discover", term: "a", page: 2 });
   });
 });
 
@@ -255,6 +159,30 @@ describe("shouldContinueTerm (continue-vs-fresh — the most-regressed runner lo
   it("handles never-run / default inputs", () => {
     expect(shouldContinueTerm({ walkedCount: 0, hasPending: false, pagesPerTerm: P })).toBe(true); // 0 walked → seeds nothing = fresh
     expect(shouldContinueTerm()).toBe(false); // defaults: 0 walked, 0 pages
+  });
+});
+
+describe("MV3 lifecycle decisions", () => {
+  it("preserves an existing queue alarm only during startup initialization", () => {
+    const existingAlarm = { scheduledTime: Date.now() + 10_000 };
+    expect(queueAlarmDecision({ intervalMinutes: 30, preserveExisting: true, existingAlarm })).toBe("preserve");
+    expect(queueAlarmDecision({ intervalMinutes: 30, preserveExisting: false, existingAlarm })).toBe("replace");
+    expect(queueAlarmDecision({ intervalMinutes: 0, preserveExisting: true, existingAlarm })).toBe("clear");
+  });
+
+  it("schedules term-gap wakes at the deadline with Chrome's 30-second floor", () => {
+    expect(termGapAlarmDelayMinutes(120_000, 0)).toBe(2);
+    expect(termGapAlarmDelayMinutes(10_000, 0)).toBe(0.5);
+    expect(termGapAlarmDelayMinutes(0, 10_000)).toBe(0.5);
+  });
+
+  it("prunes only old terminal queue and job history", () => {
+    const cutoff = Date.parse("2026-06-01T00:00:00Z");
+    expect(shouldPruneQueueRow({ status: "done", updatedAt: "2026-05-01T00:00:00Z" }, cutoff)).toBe(true);
+    expect(shouldPruneQueueRow({ status: "pending", updatedAt: "2026-05-01T00:00:00Z" }, cutoff)).toBe(false);
+    expect(shouldPruneQueueRow({ status: "failed", updatedAt: "2026-07-01T00:00:00Z" }, cutoff)).toBe(false);
+    expect(shouldPruneJob({ status: "completed", updatedAt: "2026-05-01T00:00:00Z" }, cutoff)).toBe(true);
+    expect(shouldPruneJob({ status: "running", updatedAt: "2026-05-01T00:00:00Z" }, cutoff)).toBe(false);
   });
 });
 
