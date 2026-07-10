@@ -57,6 +57,13 @@ export function termGapAlarmDelayMinutes(gapUntil, nowMs = Date.now()) {
   return Math.max(0.5, remainingMs / 60000);
 }
 
+// The in-memory tab id disappears whenever MV3 evicts/reloads the worker. Keep
+// the current id first, then fall back to the durable settings copy, without
+// ever treating null/string values as real Chrome tab ids.
+export function runnerTabCandidates(memoryTabId, persistedTabId) {
+  return [...new Set([memoryTabId, persistedTabId].filter((id) => Number.isInteger(id) && id >= 0))];
+}
+
 const TERMINAL_QUEUE_STATUSES = new Set(["done", "failed", "removed"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "error"]);
 

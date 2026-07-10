@@ -22,6 +22,12 @@ describe("shipping background lifecycle wiring", () => {
     expect(source).toContain("if (alarm.name === TERM_GAP_ALARM) onTermGapAlarm()");
   });
 
+  it("persists and restores the hidden runner tab across worker restarts", () => {
+    expect(source).toContain("runnerTabCandidates(state.tabId, settings.runnerTabId)");
+    expect(source).toMatch(/chrome\.tabs\.get\(tabId\)/);
+    expect(source).toMatch(/saveSettings\(\{\s*runnerTabId:\s*tab\.id\s*\}\)/);
+  });
+
   it("enforces sender-role authorization before dispatch", () => {
     const auth = source.indexOf("authorizeMessageSender({");
     const dispatch = source.indexOf("handleMessage(message, sender)");

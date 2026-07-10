@@ -1,6 +1,6 @@
 import { dispatchAction } from "./src/core/actions.js";
 import { recordScrape, sameCalendarDay } from "./src/core/dedupe.js";
-import { betweenTermsGate, eligibleTerms, failedToAutoRetry, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, RUNNER_DEFAULTS, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "./src/core/runner.js";
+import { betweenTermsGate, eligibleTerms, failedToAutoRetry, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, runnerTabCandidates, RUNNER_DEFAULTS, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "./src/core/runner.js";
 import { createJob, selectResumableJob } from "./src/core/jobs.js";
 import { parseSearchTerms, extractListingId } from "./src/core/etsy-url.js";
 import { urlQueueId, mergeQueueDiscovery, addTermToRow, collapseQueueRows, isLegacyQueueRow } from "./src/core/url-queue.js";
@@ -1406,15 +1406,24 @@ async function updateJobStats(jobId, delta, set = {}) {
 }
 
 async function getOrCreateRunnerTab() {
-  if (state.tabId) {
+  const settings = await getSettings();
+  const candidates = runnerTabCandidates(state.tabId, settings.runnerTabId);
+  for (const tabId of candidates) {
     try {
-      return await chrome.tabs.get(state.tabId);
+      const tab = await chrome.tabs.get(tabId);
+      state.tabId = tab.id;
+      if (settings.runnerTabId !== tab.id) await saveSettings({ runnerTabId: tab.id });
+      return tab;
     } catch {
-      state.tabId = null;
+      // The saved tab was closed while the worker slept; try the next candidate.
     }
   }
+
   const tab = await chrome.tabs.create({ url: "https://www.etsy.com", active: false });
   state.tabId = tab.id;
+  // Persist the id so a worker eviction/reload reuses this exact background tab
+  // instead of leaking a fresh hidden Etsy tab on every alarm tick.
+  await saveSettings({ runnerTabId: tab.id });
   return tab;
 }
 
