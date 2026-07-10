@@ -38,6 +38,7 @@ const EXTENSION_ALLOW = [
   "background.js",
   "content.js",
   "passive.js",
+  "review-date-utils.js",
   "dashboard.js",
   "dashboard.html",
   "shop.js",

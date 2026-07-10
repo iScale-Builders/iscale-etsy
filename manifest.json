@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "iScale Etsy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local-first Etsy research scraper v5 with manual collection, batch jobs, Shop View, and CSV export.",
   "permissions": ["alarms", "downloads", "sidePanel"],
   "host_permissions": ["https://*.etsy.com/*"],
@@ -38,7 +38,7 @@
     },
     {
       "matches": ["https://*.etsy.com/listing/*"],
-      "js": ["passive.js"],
+      "js": ["review-date-utils.js", "passive.js"],
       "run_at": "document_idle"
     }
   ]

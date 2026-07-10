@@ -40,6 +40,38 @@ export const RUNNER_DEFAULTS = {
   navigationTimeoutMaxMs: 35000,
 };
 
+// Pure alarm plan used by the MV3 service-worker shell. A persisted Chrome alarm
+// is the durable countdown; startup must not throw away elapsed time by replacing
+// it. Settings changes and completed ticks intentionally request a replacement.
+export function queueAlarmDecision({ intervalMinutes = 0, preserveExisting = false, existingAlarm = null } = {}) {
+  if (!(Number(intervalMinutes) > 0)) return "clear";
+  if (preserveExisting && existingAlarm?.scheduledTime) return "preserve";
+  return "replace";
+}
+
+// Chrome 120+ alarms have a 30-second floor. Schedule a term-boundary wake as
+// close to its durable deadline as Chrome permits instead of waiting for the next
+// full per-listing interval.
+export function termGapAlarmDelayMinutes(gapUntil, nowMs = Date.now()) {
+  const remainingMs = Math.max(0, Number(gapUntil) - Number(nowMs));
+  return Math.max(0.5, remainingMs / 60000);
+}
+
+const TERMINAL_QUEUE_STATUSES = new Set(["done", "failed", "removed"]);
+const TERMINAL_JOB_STATUSES = new Set(["completed", "error"]);
+
+export function shouldPruneQueueRow(row, cutoffMs) {
+  if (!row || !TERMINAL_QUEUE_STATUSES.has(row.status)) return false;
+  const timestamp = Date.parse(row.removedAt || row.updatedAt || row.firstSeenAt || "");
+  return Number.isFinite(timestamp) && timestamp < Number(cutoffMs);
+}
+
+export function shouldPruneJob(job, cutoffMs) {
+  if (!job || !TERMINAL_JOB_STATUSES.has(job.status)) return false;
+  const timestamp = Date.parse(job.updatedAt || job.completedAt || job.createdAt || "");
+  return Number.isFinite(timestamp) && timestamp < Number(cutoffMs);
+}
+
 export function makeListingQueueItems(urls, job, term, page) {
   const seen = new Set();
   return (Array.isArray(urls) ? urls : [])
@@ -105,77 +137,6 @@ export function recentBlockError(jobs = [], cooldownMs = 0, nowMs = Date.now()) 
     const t = Date.parse(j.updatedAt || j.completedAt || "");
     return Number.isFinite(t) && nowMs - t < cooldownMs;
   });
-}
-
-// ⚠️ NOT WIRED INTO THE LIVE RUNNER. `background.js`'s runJob drives the run with
-// `planJobSteps` + inline searchDone bookkeeping — it does NOT call
-// nextRunnerStep/planTick. These two functions are a RESERVED durable-cursor engine
-// kept for a planned user-initiated term-switching feature; wiring them in is a
-// high-risk runner rewrite to be done only as a deliberate, live-verified effort.
-// Their unit tests exercise THIS engine, not the shipping runner — don't read green
-// here as coverage of production.
-//
-// THE runner's durable-cursor decision (pure, tested) — the brain of the
-// alarm-driven driver. Given the current job's terms in order and what's already
-// been walked (searchDone) / queued (pending listing URLs), return the SINGLE next
-// action to take. No I/O, no Chrome, no in-memory loop — so a worker death just
-// means the next alarm re-derives this from the DB and continues from exactly here.
-// This is what structurally kills the round-robin: advancement is a function of
-// durable state, not of which alarm happened to fire.
-//
-// Per term, in order (skipping cancelled terms): walk any un-walked search page
-// (discover), then visit any pending listing (visit). A term is finished when every
-// page 1..pagesPerTerm is walked AND it has no pending listings. When every term is
-// finished, the run is done.
-//
-//   { type: "discover", term, page }  — walk this term's lowest un-walked page
-//   { type: "visit", term }           — visit this term's next pending listing
-//   { type: "done" }                  — no work left; the run is complete
-export function nextRunnerStep({ terms = [], pagesPerTerm = 0, walkedByTerm = {}, pendingByTerm = {}, cancelled = [] } = {}) {
-  const isCancelled = (t) => (Array.isArray(cancelled) ? cancelled.includes(t) : Boolean(cancelled?.has?.(t)));
-  for (const term of terms) {
-    if (isCancelled(term)) continue;
-    const walked = walkedByTerm[term];
-    const walkedSet = walked instanceof Set ? walked : new Set(Array.isArray(walked) ? walked : []);
-    for (let page = 1; page <= pagesPerTerm; page++) {
-      if (!walkedSet.has(page)) return { type: "discover", term, page }; // lowest un-walked page (robust to gaps)
-    }
-    if (Number(pendingByTerm[term] || 0) > 0) return { type: "visit", term };
-  }
-  return { type: "done" };
-}
-
-// THE pure brain of the alarm-driven engine. Given ONLY durable state — the running
-// job (its terms, pagesPerTerm, searchDone) and the current `listing_urls` rows —
-// return the single next action to take this tick. No I/O, no Chrome, no in-memory
-// flags: the entire "where are we / what's next" decision is derived from the DB and
-// is fully unit-testable. The runner shell just executes whatever this returns, then
-// re-arms one alarm. A worker death between ticks is irrelevant — the next tick
-// re-derives from the same durable state and continues.
-//
-//   { type: "discover", term, page }  — walk this term's next un-walked search page
-//   { type: "visit", term }           — visit this term's next pending listing
-//   { type: "done" }                  — nothing left; the run is complete
-export function planTick({ job, urlRows = [], cancelled = [] } = {}) {
-  if (!job || !Array.isArray(job.terms) || job.terms.length === 0) return { type: "done" };
-  // Walked search pages per term, parsed from searchDone ("term|page" keys).
-  const walkedByTerm = {};
-  for (const key of job.searchDone || []) {
-    const i = String(key).indexOf("|");
-    if (i < 0) continue;
-    const term = key.slice(0, i);
-    const page = Number(key.slice(i + 1));
-    if (!Number.isFinite(page)) continue;
-    (walkedByTerm[term] ||= new Set()).add(page);
-  }
-  // Count of still-pending listings per term (a URL can belong to several terms).
-  const pendingByTerm = {};
-  for (const u of Array.isArray(urlRows) ? urlRows : []) {
-    if (!u || u.status !== "pending") continue;
-    const terms = u.terms?.length ? u.terms : [u.searchTerm, u.term].filter(Boolean);
-    for (const t of terms) pendingByTerm[t] = (pendingByTerm[t] || 0) + 1;
-  }
-  return nextRunnerStep({ terms: job.terms, pagesPerTerm: job.pagesPerTerm || 0, walkedByTerm, pendingByTerm, cancelled });
 }
 
 // BETWEEN-TERMS pause decision (pure, tested). Called right before the runner would

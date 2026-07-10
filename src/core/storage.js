@@ -100,6 +100,19 @@ export async function bulkPut(storeName, records) {
   });
 }
 
+export async function bulkDelete(storeName, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  const db = await openScraperDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
+    for (const id of ids) store.delete(id);
+    tx.oncomplete = () => resolve(ids.length);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("bulkDelete transaction aborted"));
+  });
+}
+
 export async function getAllRecords(storeName) {
   const db = await openScraperDb();
   return withStore(db, storeName, "readonly", (store) => store.getAll());

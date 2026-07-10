@@ -61,7 +61,7 @@ private iScaleLabs production endpoint in this public edition.
 2. Open Chrome and go to `chrome://extensions`.
 3. Enable Developer mode.
 4. Click **Load unpacked**.
-5. Select the `public-etsy-scraper-v5` folder.
+5. Select the cloned repository folder — the folder that contains `manifest.json`.
 6. Pin the extension if you want quick access to the popup.
 7. Open the popup to start a batch, or open the Shop View to browse/import/export CSVs.
 
@@ -106,11 +106,11 @@ The extension shows what it is collecting, as it collects it:
 
 ### Side panel mode
 
-Toggle **Side panel mode** (in the popup or the dashboard) to dock the live
-dashboard into Chrome's side panel so it stays open beside Etsy while you browse.
-With it on, clicking the toolbar icon opens the side panel; with it off,
-everything stays as it is now (popup + tabs). Both modes are fully functional and
-the toggle is available in each. Requires Chrome 114+.
+Click **Side panel** in the popup to dock the live dashboard beside Etsy while
+you browse. Click **Popup** in the side panel to close it and return to the normal
+toolbar-popup workflow. The toolbar icon always opens the popup; side-panel mode
+is opened explicitly rather than stored as a persistent toolbar preference.
+Requires Chrome 114+.
 
 ## Shop View
 

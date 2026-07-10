@@ -1,17 +1,18 @@
 import { dispatchAction } from "./src/core/actions.js";
 import { recordScrape, sameCalendarDay } from "./src/core/dedupe.js";
-import { betweenTermsGate, eligibleTerms, failedToAutoRetry, makeListingQueueItems, planJobSteps, recentBlockError, RUNNER_DEFAULTS, shouldContinueTerm, shouldStartNewCycle } from "./src/core/runner.js";
+import { betweenTermsGate, eligibleTerms, failedToAutoRetry, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, RUNNER_DEFAULTS, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "./src/core/runner.js";
 import { createJob, selectResumableJob } from "./src/core/jobs.js";
 import { parseSearchTerms, extractListingId } from "./src/core/etsy-url.js";
 import { urlQueueId, mergeQueueDiscovery, addTermToRow, collapseQueueRows, isLegacyQueueRow } from "./src/core/url-queue.js";
 import { buildQueueView } from "./src/core/queue-view.js";
 import { withListingsLock } from "./src/core/locks.js";
-import { getAllRecords, getAllByIndex, getRecord, putRecord, bulkPut, countRecords, deleteRecord, clearStore, reduceRecords } from "./src/core/storage.js";
+import { getAllRecords, getAllByIndex, getRecord, putRecord, bulkPut, bulkDelete, countRecords, deleteRecord, clearStore, reduceRecords } from "./src/core/storage.js";
 import { rowsToCsv, csvHeaderLine, csvRowLine, makeExportFilename, withSubfolder } from "./src/core/csv.js";
 import { DEFAULT_SETTINGS, feedItem, formatBadgeCount, shouldAutoExport, jitteredAutoRunMinutes, jitteredBetweenTermsMs, blockCooldownMs, inBlockCooldown } from "./src/core/collection.js";
 import { mergeSearchResult, searchResultKey, SEARCH_EXPORT_COLUMNS } from "./src/core/search-results.js";
 import { aggregateSession, blankSessionTally, foldSessionUrl } from "./src/core/session.js";
 import { createKeyedQueue } from "./src/core/serialize.js";
+import { authorizeMessageSender } from "./src/core/message-auth.js";
 
 const state = {
   activeJobId: null,
@@ -130,12 +131,50 @@ async function initFromSettings() {
   await migrateQueueToUrlKeyed();
   await cleanOrphanQueue();
   await resetOrphanProcessing();
+  await pruneHistory();
   const settings = await getSettings();
-  await scheduleQueueRun(settings);
+  // Chrome alarms survive MV3 worker eviction. Preserve an existing countdown
+  // instead of resetting it to a full fresh interval on every worker startup.
+  await scheduleQueueRun(settings, { preserveExisting: true });
   // Guarded: if scheduleQueueRun armed the QUEUE_RUN countdown (auto-run on), let THAT
   // advance the run rather than firing an immediate extra scrape on every SW restart.
   // A manual/auto-off interrupted job (no pending alarm) still resumes right away. (HIGH-1)
   await guardedResume();
+}
+
+const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function pruneHistory(nowMs = Date.now()) {
+  const cutoff = nowMs - HISTORY_RETENTION_MS;
+  try {
+    const [queueIds, jobIds] = await Promise.all([
+      reduceRecords(
+        "listing_urls",
+        (ids, row) => {
+          if (shouldPruneQueueRow(row, cutoff)) ids.push(row.id);
+          return ids;
+        },
+        [],
+      ),
+      reduceRecords(
+        "jobs",
+        (ids, job) => {
+          if (shouldPruneJob(job, cutoff)) ids.push(job.id);
+          return ids;
+        },
+        [],
+      ),
+    ]);
+    const [queueDeleted, jobsDeleted] = await Promise.all([
+      bulkDelete("listing_urls", queueIds),
+      bulkDelete("jobs", jobIds),
+    ]);
+    if (queueDeleted || jobsDeleted) {
+      console.log(`[History] Pruned ${queueDeleted} terminal queue rows and ${jobsDeleted} terminal jobs older than 30 days.`);
+    }
+  } catch (error) {
+    console.warn("[History] retention cleanup failed:", error);
+  }
 }
 
 // Drop pending/failed queue rows whose term is no longer an actual QUEUED PILL
@@ -146,22 +185,20 @@ async function initFromSettings() {
 // wrongly-cleared URL just re-discovers on the next run. (bug, 2026-06-26)
 async function cleanOrphanQueue() {
   try {
-    const [terms, rows] = await Promise.all([
-      getAllRecords("search_terms"),
-      getAllRecords("listing_urls"),
-    ]);
+    const terms = await getAllRecords("search_terms");
     const live = new Set(terms.map((t) => t.term));
-    let removed = 0;
-    for (const r of rows) {
-      // Clear ALL rows (incl. done) whose term isn't a queued pill — so the queue
-      // only ever holds rows for current terms, and a removed term leaves no
-      // "163/163" history that makes a fresh re-add look already-done. The actual
-      // collected data lives in `listings`, which is never touched.
-      const rterms = [...(r.terms || []), r.searchTerm, r.term].filter(Boolean);
-      if (rterms.some((t) => live.has(t))) continue; // still wanted by a queued pill
-      await deleteRecord("listing_urls", r.id);
-      removed += 1;
-    }
+    const orphanIds = await reduceRecords(
+      "listing_urls",
+      (ids, row) => {
+        // Clear ALL rows (incl. done) whose term isn't a queued pill — so the queue
+        // only ever holds rows for current terms. Accumulate ids, not full rows.
+        const rowTerms = [...(row.terms || []), row.searchTerm, row.term].filter(Boolean);
+        if (!rowTerms.some((term) => live.has(term))) ids.push(row.id);
+        return ids;
+      },
+      [],
+    );
+    const removed = await bulkDelete("listing_urls", orphanIds);
     if (removed) console.log(`[Queue] Cleaned ${removed} orphaned pending URLs (their terms aren't queued).`);
   } catch (error) {
     console.warn("[Queue] orphan cleanup failed:", error);
@@ -177,18 +214,20 @@ async function cleanOrphanQueue() {
 // Does NOT touch the runner loop. (bug, 2026-06-26)
 async function resetOrphanProcessing(olderThan) {
   try {
-    const rows = await getAllRecords("listing_urls");
-    let reset = 0;
-    for (const r of rows) {
-      if (r.status !== "processing") continue;
-      // When a cutoff is supplied (per-run heal), only reset rows last touched
-      // BEFORE this run started — i.e. genuine ghosts from a prior run / SW death.
-      // This makes the heal safe even if a future caller runs it without holding
-      // the runner latch, so it can never steal a row an in-flight run owns.
-      if (olderThan && r.updatedAt && r.updatedAt >= olderThan) continue;
-      await putRecord("listing_urls", { ...r, status: "pending", updatedAt: new Date().toISOString() });
-      reset += 1;
-    }
+    const now = new Date().toISOString();
+    const rows = await reduceRecords(
+      "listing_urls",
+      (out, row) => {
+        if (row.status !== "processing") return out;
+        // When a cutoff is supplied (per-run heal), only reset rows last touched
+        // BEFORE this run started — i.e. genuine ghosts from a prior run / SW death.
+        if (olderThan && row.updatedAt && row.updatedAt >= olderThan) return out;
+        out.push({ ...row, status: "pending", updatedAt: now });
+        return out;
+      },
+      [],
+    );
+    const reset = await bulkPut("listing_urls", rows);
     if (reset) console.log(`[Queue] Reset ${reset} orphaned processing rows → pending.`);
   } catch (error) {
     console.warn("[Queue] processing reset failed:", error);
@@ -222,11 +261,14 @@ chrome.runtime.onStartup?.addListener(() => initFromSettings());
 initFromSettings();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Only accept messages from this extension's own contexts (pages + our content
-  // scripts all carry the extension id). Defense-in-depth — content.js/passive.js
-  // already do this. (audit LOW)
-  if (sender?.id !== chrome.runtime.id) {
-    sendResponse({ ok: false, error: "unauthorized" });
+  const authorization = authorizeMessageSender({
+    action: message?.action,
+    sender,
+    extensionId: chrome.runtime.id,
+    extensionOrigin: chrome.runtime.getURL(""),
+  });
+  if (!authorization.allowed) {
+    sendResponse({ ok: false, error: authorization.reason });
     return false;
   }
   handleMessage(message, sender)
@@ -440,6 +482,7 @@ async function handleMessage(message, sender) {
 }
 
 const JOB_KEEPALIVE_ALARM = "etsy-job-keepalive";
+const TERM_GAP_ALARM = "etsy-term-gap";
 const MAX_CONSECUTIVE_FAILURES = 8;
 
 // The ONE entry point that runs a job loop. Owns the running/loopAlive flags so
@@ -485,10 +528,7 @@ async function resumeJob() {
     const job = selectResumableJob(jobs);
     if (!job) return { resumed: false, reason: "no_job" };
     // URL-keyed queue is global — reset every mid-visit (processing) row to pending.
-    const processing = (await getAllRecords("listing_urls")).filter((x) => x.status === "processing");
-    for (const u of processing) {
-      await putRecord("listing_urls", { ...u, status: "pending", updatedAt: new Date().toISOString() });
-    }
+    await resetOrphanProcessing();
     launchJob(job);
     return { resumed: true, mode: "relaunched", jobId: job.id };
   } finally {
@@ -613,8 +653,8 @@ async function runJob(job) {
   // BETWEEN-TERMS pause (opt-in; betweenTermsSec) evaluated at the TRUE term boundary:
   // right before the FIRST actionable step of a new term, so the next term's searches
   // AND visits both wait. Default 0 leaves this inert — the per-listing cadence is
-  // byte-for-byte unchanged. Durable job fields (currentTerm/termGapUntil) make it
-  // survive a worker death mid-pause; it rides the existing alarm (no second timer).
+  // unchanged. Durable job fields (currentTerm/termGapUntil) make it survive a
+  // worker death mid-pause; a dedicated one-shot alarm wakes at the deadline.
   // Returns true when it gated — the caller must yield (return) so the alarm re-checks
   // on the next tick. `currentTerm` is armed by whichever step type first does real work
   // for a term, so it never silently no-ops when a term has only searches or only visits.
@@ -643,7 +683,10 @@ async function runJob(job) {
     }
     if (gate.gated) {
       const until = "setGapUntil" in gate && gate.setGapUntil ? gate.setGapUntil : jobNow?.termGapUntil || Date.now() + betweenMs;
+      await scheduleTermGapResume(until);
       emit({ phase: "between-terms", term: stepTerm, gapUntil: until, currentUrl: "" });
+    } else if ("setGapUntil" in gate && gate.setGapUntil === 0) {
+      await chrome.alarms.clear(TERM_GAP_ALARM);
     }
     return gate.gated;
   };
@@ -656,7 +699,10 @@ async function runJob(job) {
       const key = `${step.term}|${step.page}`;
       if (searchDone.has(key)) continue; // already done on a previous (interrupted) run — skip (no gate)
       // First actionable step of this term → pause at the boundary before its searches start.
-      if (await applyBetweenTermsGate("search", step.term)) return;
+      if (await applyBetweenTermsGate("search", step.term)) {
+        stopKeepAlivePing();
+        return;
+      }
       await waitWhilePaused();
       emit({ phase: "search", term: step.term, page: step.page, currentUrl: "" });
       await navigateAndWait(tab.id, step.url);
@@ -712,11 +758,15 @@ async function runJob(job) {
     if (shouldStop() || aborted || state.cancelledTerms.has(step.term)) break;
     // First actionable step of this term may be a visit (its searches were walked on a
     // prior run) — pause at the boundary before the first listing too.
-    if (await applyBetweenTermsGate("visit", step.term)) return;
+    if (await applyBetweenTermsGate("visit", step.term)) {
+      stopKeepAlivePing();
+      return;
+    }
     await waitWhilePaused();
     progress.queue = pending.length;
     emit({ phase: "visiting", term: step.term });
     if (!(await processItem(pending[0], step.term))) break; // breaker → fall through to completion
+    stopKeepAlivePing();
     return; // ONE listing visited — yield; the countdown alarm resumes the job for the next
   }
 
@@ -751,14 +801,17 @@ async function persistSearchDone(jobId, searchDoneSet) {
 
 // ---- durability: resume an interrupted job after a service-worker restart ----
 
-// ROOT-CAUSE FIX (2026-06-26): MV3 terminates an idle service worker after ~30s,
-// and a pending setTimeout (the between-listings / between-terms holds) does NOT
-// keep it alive — so the worker died mid-hold and an alarm respawned the loop on a
-// different term (the round-robin: one listing per term, modal never opening). A
-// recurring extension-API call every 20s resets the idle-termination timer, so the
-// run loop survives the holds. The 0.5-min keepalive ALARM stays as a belt-and-
-// suspenders resume path if the worker is evicted anyway (e.g. memory pressure).
+// Keep the worker alive only while a tick is actively navigating/extracting. Each
+// deliberate one-listing or term-gap yield stops the API ping; the durable alarms
+// own the idle wait and wake the next tick. This avoids an indefinitely-live MV3
+// worker while retaining protection during long review extraction.
 let keepAlivePing = null;
+function stopKeepAlivePing() {
+  if (!keepAlivePing) return;
+  clearInterval(keepAlivePing);
+  keepAlivePing = null;
+}
+
 async function startKeepAlive() {
   if (!keepAlivePing) {
     keepAlivePing = setInterval(() => {
@@ -777,14 +830,24 @@ async function startKeepAlive() {
 }
 
 async function stopKeepAlive() {
-  if (keepAlivePing) {
-    clearInterval(keepAlivePing);
-    keepAlivePing = null;
-  }
+  stopKeepAlivePing();
   try {
-    await chrome.alarms.clear(JOB_KEEPALIVE_ALARM);
+    await Promise.all([
+      chrome.alarms.clear(JOB_KEEPALIVE_ALARM),
+      chrome.alarms.clear(TERM_GAP_ALARM),
+    ]);
   } catch {
     // ignore
+  }
+}
+
+async function scheduleTermGapResume(gapUntil) {
+  try {
+    await chrome.alarms.create(TERM_GAP_ALARM, {
+      delayInMinutes: termGapAlarmDelayMinutes(gapUntil),
+    });
+  } catch {
+    // JOB_KEEPALIVE/QUEUE_RUN still provide a slower fallback wake.
   }
 }
 
@@ -806,10 +869,7 @@ async function resumeInterruptedJob() {
     }
     // URLs left mid-visit when the worker died must be retried, not skipped. The
     // queue is URL-keyed (global), so reset every processing row back to pending.
-    const processing = (await getAllRecords("listing_urls")).filter((x) => x.status === "processing");
-    for (const u of processing) {
-      await putRecord("listing_urls", { ...u, status: "pending", updatedAt: new Date().toISOString() });
-    }
+    await resetOrphanProcessing();
     launchJob(job);
   } finally {
     state.launching = false;
@@ -819,7 +879,21 @@ async function resumeInterruptedJob() {
 chrome.alarms?.onAlarm.addListener((alarm) => {
   if (alarm.name === JOB_KEEPALIVE_ALARM) guardedResume();
   if (alarm.name === QUEUE_RUN_ALARM) onQueueAlarm();
+  if (alarm.name === TERM_GAP_ALARM) onTermGapAlarm();
 });
+
+async function onTermGapAlarm() {
+  const running = (await getAllRecords("jobs")).find((job) => job?.status === "running");
+  if (!running) return;
+  await resumeInterruptedJob();
+  // The term-gap wake just performed an auto-run tick earlier than the old queue
+  // countdown. Re-arm that countdown from now so the next listing still receives
+  // the full configured interval. Manual jobs keep their independent cadence.
+  if (running.source === "auto") {
+    const settings = await getSettings();
+    if (settings.autoRunEnabled) await scheduleQueueRun(settings);
+  }
+}
 
 // The QUEUE_RUN alarm (the countdown) advances the run one listing per tick. This
 // 0.5-min keepalive alarm is now ONLY a stall safety net: it resumes the in-flight
@@ -953,13 +1027,16 @@ async function removeTerm(id) {
 }
 
 async function clearTerms() {
-  await clearStore("search_terms");
-  // Also clear jobs' terms[] (so running/recent jobs don't re-surface their pills)
-  // and halt the live runner on every one of them.
-  for (const j of await getAllRecords("jobs")) {
+  // Strip durable jobs FIRST. If Chrome evicts the worker mid-clear, an empty job
+  // cannot resume and recreate supposedly-cleared synthetic term pills.
+  const jobs = await getAllRecords("jobs");
+  for (const j of jobs) {
     for (const t of j.terms || []) state.cancelledTerms.add(t);
-    if (Array.isArray(j.terms) && j.terms.length) await putRecord("jobs", { ...j, terms: [] });
+    if (Array.isArray(j.terms) && j.terms.length) {
+      await updateJob(j.id, (current) => ({ ...current, terms: [], searchDone: [] }));
+    }
   }
+  await clearStore("search_terms");
   // Clear queue = full queue reset: wipe the whole listing_urls store (the
   // `listings` collection is a separate store and is untouched).
   await clearStore("listing_urls");
@@ -996,11 +1073,14 @@ async function runTerms(terms, pagesPerTerm, source = "manual") {
     }
     // Which terms still have URLs to visit.
     const hasPending = new Set();
-    for (const u of await getAllRecords("listing_urls")) {
-      if (u.status !== "pending" && u.status !== "processing") continue;
-      const rterms = u.terms?.length ? u.terms : [u.searchTerm, u.term].filter(Boolean);
-      for (const t of rterms) if (want.has(t)) hasPending.add(t);
-    }
+    await Promise.all(
+      [...want].map(async (term) => {
+        const rows = await getAllByIndex("listing_urls", "terms", term);
+        if (rows.some((row) => row.status === "pending" || row.status === "processing")) {
+          hasPending.add(term);
+        }
+      }),
+    );
     // Seed walked pages only for terms with leftover work (else re-discover fresh).
     const seed = new Set();
     let continued = false;
@@ -1101,14 +1181,17 @@ async function retryFailedTerm(term, pagesPerTerm) {
 // Schedule the next auto-run cycle as a ONE-SHOT alarm whose delay is jittered
 // ±randomizePct around the interval (when randomize is on). One-shot + re-arm
 // (see onQueueAlarm) lets each cycle's wait differ; a periodic alarm cannot.
-async function scheduleQueueRun(settings) {
+async function scheduleQueueRun(settings, { preserveExisting = false } = {}) {
   try {
-    await chrome.alarms.clear(QUEUE_RUN_ALARM);
     const minutes = jitteredAutoRunMinutes(settings);
+    const existing = preserveExisting ? await chrome.alarms.get(QUEUE_RUN_ALARM) : null;
+    const decision = queueAlarmDecision({ intervalMinutes: minutes, preserveExisting, existingAlarm: existing });
+    if (decision === "preserve") return;
+    await chrome.alarms.clear(QUEUE_RUN_ALARM);
     // 0.5 min = 30s floor (the UI's minimum). Unpacked extensions honor sub-minute
     // alarms; this also floors any low jitter so a randomized interval never dips
     // under 30s. No upper cap — the interval can be as large as the user sets.
-    if (minutes > 0) await chrome.alarms.create(QUEUE_RUN_ALARM, { delayInMinutes: Math.max(0.5, minutes) });
+    if (decision === "replace") await chrome.alarms.create(QUEUE_RUN_ALARM, { delayInMinutes: Math.max(0.5, minutes) });
   } catch {
     // alarms unavailable — interval auto-run won't fire.
   }
