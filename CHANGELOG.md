@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2 — Durable runner-tab reuse
+
+- Persist the hidden Etsy runner tab id and reuse it after MV3 service-worker
+  eviction or an unpacked-extension reload instead of accumulating orphan tabs.
+- Add regression coverage for restored, duplicated, and invalid tab ids.
+- Live reload verification reused the same tab, resumed the interrupted job,
+  paginated real Etsy review modals, and advanced to subsequent listings.
+
 ## 1.0.1 — Runner and extraction stabilization
 
 - Preserve auto-run countdowns across MV3 service-worker restarts and use a

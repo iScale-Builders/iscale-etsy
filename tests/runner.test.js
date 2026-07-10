@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { betweenTermsGate, eligibleTerms, failedToAutoRetry, getJobSearchUrls, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "../src/core/runner.js";
+import { betweenTermsGate, eligibleTerms, failedToAutoRetry, getJobSearchUrls, makeListingQueueItems, planJobSteps, queueAlarmDecision, recentBlockError, runnerTabCandidates, shouldContinueTerm, shouldPruneJob, shouldPruneQueueRow, shouldStartNewCycle, termGapAlarmDelayMinutes } from "../src/core/runner.js";
+
+describe("runnerTabCandidates (durable MV3 runner-tab identity)", () => {
+  it("prefers the current worker tab and falls back to the persisted id", () => {
+    expect(runnerTabCandidates(42, 17)).toEqual([42, 17]);
+  });
+
+  it("deduplicates the id restored by a worker restart", () => {
+    expect(runnerTabCandidates(42, 42)).toEqual([42]);
+  });
+
+  it("ignores absent and malformed tab ids", () => {
+    expect(runnerTabCandidates(null, 17)).toEqual([17]);
+    expect(runnerTabCandidates("17", -1)).toEqual([]);
+  });
+});
 
 describe("failedToAutoRetry (auto-retry failed URLs when auto-run is idle)", () => {
   const rows = [
