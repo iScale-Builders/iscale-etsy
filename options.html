@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iScale Etsy — Worker options</title>
+    <style>
+      :root { --bg:#faf8f5; --card:#fff; --ink:#222; --muted:#595959; --line:#e1e3df; --accent:#f1641e; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+      main { max-width: 720px; margin: 0 auto; padding: 28px 20px 64px; }
+      h1 { font-size: 1.4rem; margin: 0 0 8px; }
+      p { color: var(--muted); line-height: 1.45; }
+      form, .status { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-top: 16px; }
+      label { display: block; font-size: 0.82rem; color: var(--muted); margin: 12px 0 6px; }
+      input[type="text"], input[type="password"], input[type="number"], input[type="url"] {
+        width: 100%; font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+      }
+      .row { display: flex; gap: 12px; }
+      .row > div { flex: 1; }
+      .switch { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-weight: 600; }
+      button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+      button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; }
+      .msg { min-height: 1.2em; margin-top: 10px; }
+      .msg.error { color: #b42318; }
+      .msg.ok { color: #15803d; }
+      code { font-size: 0.85em; }
+      pre { white-space: pre-wrap; font-size: 0.82rem; background: #f6f3ee; padding: 10px; border-radius: 10px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Worker mode</h1>
+      <p>
+        Off by default. When you turn it on, this visible Chrome window claims Etsy
+        searches from a backend you configure, types them into Etsy's search box, and
+        uploads each results page as it finishes. Nothing here is hardcoded. Leave
+        the window open and in front — the lane is headed, never headless.
+      </p>
+      <form id="form">
+        <label class="switch"><input id="enabled" type="checkbox" /> Enable worker mode</label>
+        <label for="backendUrl">Backend URL</label>
+        <input id="backendUrl" type="url" placeholder="https://YOUR_PROJECT.supabase.co" autocomplete="off" />
+        <label for="anonKey">Publishable or anon key</label>
+        <input id="anonKey" type="password" autocomplete="off" placeholder="sb_publishable_... or the legacy anon JWT" />
+        <p>Paste the publishable key or the legacy anon key. A <code>service_role</code> JWT or an <code>sb_secret_</code> key is rejected. The key is sent as <code>apikey</code>, never as the bearer token.</p>
+        <label for="email">Lane email</label>
+        <input id="email" type="email" autocomplete="username" />
+        <label for="password">Lane password</label>
+        <input id="password" type="password" autocomplete="current-password" />
+        <p>Sign-in uses email and password against Supabase Auth. The password is not saved. The refresh token stays in this browser.</p>
+        <label for="laneName">Lane name</label>
+        <input id="laneName" type="text" placeholder="lane-1" maxlength="64" />
+        <div class="row">
+          <div>
+            <label for="pollSeconds">Poll interval (seconds)</label>
+            <input id="pollSeconds" type="number" min="5" max="120" value="20" />
+          </div>
+          <div>
+            <label for="leaseSeconds">Claim lease (seconds)</label>
+            <input id="leaseSeconds" type="number" min="30" max="3600" value="180" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="paceMin">Pace min (ms between pages)</label>
+            <input id="paceMin" type="number" min="500" max="120000" value="4000" />
+          </div>
+          <div>
+            <label for="paceMax">Pace max (ms)</label>
+            <input id="paceMax" type="number" min="500" max="120000" value="9000" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="keyMin">Keystroke min (ms)</label>
+            <input id="keyMin" type="number" min="10" max="1000" value="40" />
+          </div>
+          <div>
+            <label for="keyMax">Keystroke max (ms)</label>
+            <input id="keyMax" type="number" min="10" max="2000" value="140" />
+          </div>
+        </div>
+        <label for="backoff">Captcha backoff (minutes)</label>
+        <input id="backoff" type="number" min="1" max="240" value="30" />
+        <div class="row">
+          <div>
+            <label for="betweenMin">Pause between jobs min (seconds)</label>
+            <input id="betweenMin" type="number" min="0" max="600" value="20" />
+          </div>
+          <div>
+            <label for="betweenMax">Pause between jobs max (seconds)</label>
+            <input id="betweenMax" type="number" min="0" max="600" value="60" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="jobsPerHour">Jobs per hour</label>
+            <input id="jobsPerHour" type="number" min="1" max="500" value="30" />
+          </div>
+          <div>
+            <label for="heartbeat">Heartbeat (seconds)</label>
+            <input id="heartbeat" type="number" min="10" max="300" value="30" />
+          </div>
+        </div>
+        <label class="switch"><input id="realtime" type="checkbox" checked /> Wake on new jobs (Supabase Realtime, optional)</label>
+        <p>Default poll is 20 seconds. Chrome may not wake a sleeping extension faster than every 30 seconds, which is still inside the two-minute pickup budget. Realtime is a faster hint when your project publishes <code>etsy_worker.jobs</code>.</p>
+        <div class="actions">
+          <button class="primary" type="submit">Save</button>
+          <button id="health" type="button">Check health</button>
+        </div>
+        <p class="msg" id="msg" role="status"></p>
+      </form>
+      <section class="status">
+        <h2>Lane</h2>
+        <pre id="lane">Worker mode is off.</pre>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

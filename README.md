@@ -53,7 +53,8 @@ are parsed locally in your browser. CSV exports are generated locally from your
 browser data.
 
 There is no Supabase dependency, no hosted database, no account system, and no
-private iScaleLabs production endpoint in this public edition.
+private iScaleLabs production endpoint in this public edition. Optional worker
+mode, described below, stays off until you point it at a backend you run.
 
 ## Install From Source
 
@@ -169,6 +170,62 @@ The extension is designed around explicit local actions such as:
 
 This keeps the human UI and future agent/chat control working against the same
 local state model.
+
+## Optional worker mode
+
+Worker mode is off unless you turn it on. Local collection, batch jobs, Shop
+View, and CSV export behave the same when it stays off.
+
+When it is on, a headed Chrome window becomes a lane. An agent queues a
+command (`search`, `scrape-listings`, `scrape-shop`, `export`, or
+`collection-stats`) through `scripts/etsy-worker.mjs`. The lane claims the
+next job and runs it in that visible window. Search still types the term into
+Etsy's search box, reads the total result count, and uploads each page as it
+finishes. Listing and shop jobs use the same window, with the same pause
+between visits, and stop when a captcha appears. Export and collection stats
+read that browser's local data and upload a snapshot. Rows land as each page
+finishes, not only at the end of the job.
+
+Nothing in the extension or the CLI is a backend URL or key. You set the
+project URL and the publishable or anon key, then sign in with an operator
+email and password. The key is the `apikey` header. The bearer token is the
+signed-in user's access token. A `service_role` or `sb_secret_` key is rejected.
+
+```bash
+export ETSY_WORKER_URL="https://YOUR_PROJECT.supabase.co"
+export ETSY_WORKER_ANON_KEY="your-publishable-or-anon-key"
+export ETSY_WORKER_EMAIL="agent@example.com"
+export ETSY_WORKER_PASSWORD="the-agent-password"
+
+npm run worker -- add-terms "linen apron" --priority 10 --pages 2
+npm run worker -- status --term "linen apron"
+npm run worker -- results --term "linen apron" --json
+npm run worker -- search-now "rush term" --pages 1
+npm run worker -- scrape-listings --url "https://www.etsy.com/listing/1234567890"
+npm run worker -- scrape-shop --shop CoolShop --pages 1
+npm run worker -- export --source shop --format csv
+npm run worker -- stats
+```
+
+```powershell
+$env:ETSY_WORKER_URL = "https://YOUR_PROJECT.supabase.co"
+$env:ETSY_WORKER_ANON_KEY = "your-publishable-or-anon-key"
+$env:ETSY_WORKER_EMAIL = "agent@example.com"
+$env:ETSY_WORKER_PASSWORD = "the-agent-password"
+
+npm run worker -- add-terms "linen apron" --priority 10 --pages 2
+npm run worker -- status --term "linen apron"
+npm run worker -- results --term "linen apron" --json
+npm run worker -- search-now "rush term" --pages 1
+npm run worker -- scrape-listings --url "https://www.etsy.com/listing/1234567890"
+npm run worker -- scrape-shop --shop CoolShop --pages 1
+npm run worker -- export --source shop --format csv
+npm run worker -- stats
+```
+
+Setup, several lanes, health, stuck jobs, and a smoke test are in
+[docs/worker-runbook.md](docs/worker-runbook.md). The SQL is in
+[supabase/migrations](supabase/migrations/).
 
 ## Project Scripts
 

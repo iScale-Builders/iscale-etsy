@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  const parseSearchResults = globalThis.IscaleEtsy?.parseSearchResults;
+  const detectSearchBlock = globalThis.IscaleEtsy?.detectSearchBlock;
+  if (!parseSearchResults || !detectSearchBlock) {
+    console.error("iScale Etsy search helpers did not load");
+    return;
+  }
+
   if (window.__etsyResearchSearchRan) return;
   window.__etsyResearchSearchRan = true;
 
@@ -115,102 +122,8 @@
     return Array.from(seen);
   }
 
-  // ---- full search-result capture (mirror of src/core/search-results.js) ----
-
-  function num(value) {
-    if (value == null || value === "") return null;
-    const match = String(value).replace(/,/g, "").match(/-?\d+(\.\d+)?/);
-    return match ? Number.parseFloat(match[0]) : null;
-  }
-
-  function closestCard(anchor) {
-    let el = anchor;
-    for (let i = 0; i < 6 && el && el.parentElement; i++) {
-      el = el.parentElement;
-      if (!el.getAttribute) continue;
-      if (el.getAttribute("data-listing-id") || /(^|\s)(v2-listing-card|listing-link|wt-grid__item|js-merch-stash-check-listing)/.test(el.className || "")) return el;
-      if (el.tagName === "LI") return el;
-    }
-    return anchor.parentElement || anchor;
-  }
-
-  function cardText(card, selector) {
-    const el = card && card.querySelector ? card.querySelector(selector) : null;
-    return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
-  }
-
-  function cardPrice(card) {
-    if (!card || !card.querySelector) return "";
-    const value = card.querySelector(".currency-value");
-    if (value) {
-      const symbol = card.querySelector(".currency-symbol");
-      return `${symbol ? symbol.textContent.trim() : ""}${value.textContent.trim()}`;
-    }
-    const match = (card.textContent || "").match(/[$£€]\s?\d[\d,.]*/);
-    return match ? match[0].replace(/\s/g, "") : "";
-  }
-
-  function cardRating(card) {
-    if (!card || !card.querySelector) return null;
-    for (const el of card.querySelectorAll('[aria-label*="out of 5"], input[name*="rating"]')) {
-      const label = String(el.getAttribute("aria-label") || el.getAttribute("value") || "");
-      const m = label.match(/([\d.]+)\s*out of 5/i) || String(el.getAttribute("value") || "").match(/^([\d.]+)$/);
-      if (m) return Number.parseFloat(m[1]);
-    }
-    return null;
-  }
-
-  function cardReviewCount(card) {
-    if (!card || !card.querySelector) return null;
-    const labelled = card.querySelector('[aria-label*="review" i]');
-    if (labelled) {
-      const n = num(labelled.getAttribute("aria-label"));
-      if (n != null) return n;
-    }
-    const m = (card.textContent || "").match(/\(([\d,]+)\)/);
-    return m ? num(m[1]) : null;
-  }
-
-  function cardImage(card) {
-    const img = card && card.querySelector ? card.querySelector("img") : null;
-    return img ? img.getAttribute("src") || img.getAttribute("data-src") || "" : "";
-  }
-
-  function cardIsAd(card) {
-    const text = ((card && card.textContent) || "").toLowerCase();
-    return text.includes("ad by") || text.includes("advertisement") || text.includes("ad from");
-  }
-
-  function parseSearchResults() {
-    const url = new URL(window.location.href);
-    const keyword = (url.searchParams.get("q") || "").trim();
-    const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
-    const capturedAt = new Date().toISOString();
-    const results = [];
-    const seen = new Set();
-
-    for (const anchor of document.querySelectorAll('a[href*="/listing/"]')) {
-      const listingId = (String(anchor.getAttribute("href") || "").match(/\/listing\/(\d{7,12})/) || [])[1];
-      if (!listingId || seen.has(listingId)) continue;
-      seen.add(listingId);
-      const card = closestCard(anchor);
-      results.push({
-        keyword,
-        page,
-        position: results.length + 1,
-        listingId,
-        url: `https://www.etsy.com/listing/${listingId}`,
-        title: cardText(card, "h3") || (anchor.getAttribute("title") || anchor.textContent || "").replace(/\s+/g, " ").trim().slice(0, 300),
-        price: cardPrice(card),
-        reviewCount: cardReviewCount(card),
-        rating: cardRating(card),
-        shopName: cardText(card, ".v2-listing-card__shop, [data-shop-name]"),
-        imageUrl: cardImage(card),
-        isAd: cardIsAd(card),
-        capturedAt,
-      });
-    }
-    return { keyword, page, capturedAt, results };
+  function readSearchResults() {
+    return parseSearchResults(document, window.location.href);
   }
 
   // Auto-capture full search results shortly after the page settles. Captured in
@@ -218,7 +131,7 @@
   // otherwise the runner's own capture AND this passive one both fire for the
   // same page, double-logging it and double-counting its appearance history.
   const autoCaptureTimer = setTimeout(() => {
-    const payload = parseSearchResults();
+    const payload = readSearchResults();
     if (!payload.keyword || payload.results.length === 0) return;
     // fromManualBrowse → the background also accumulates these cards as listings
     // tagged with this keyword, so manual browsing feeds the same collection as
@@ -237,10 +150,18 @@
       clearTimeout(autoCaptureTimer);
       // Scroll the page like a human, then extract everything that loaded.
       simulateHumanScrolling()
-        .then(() => sendResponse({ urls: extractSearchLinks(), payload: parseSearchResults() }))
-        .catch(() => sendResponse({ urls: extractSearchLinks(), payload: parseSearchResults() }));
+        .then(() => {
+          const payload = readSearchResults();
+          sendResponse({ urls: extractSearchLinks(), payload, block: detectSearchBlock(document, location.href) });
+        })
+        .catch(() => {
+          const payload = readSearchResults();
+          sendResponse({ urls: extractSearchLinks(), payload, block: detectSearchBlock(document, location.href) });
+        });
       return true;
     }
+    // worker-page.js owns these. Don't answer first or the lane never sees them.
+    if (String(message?.action || "").startsWith("worker.")) return false;
     sendResponse({ error: "unknown_action" });
     return true;
   });

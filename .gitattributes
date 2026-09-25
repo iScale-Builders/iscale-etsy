@@ -1,0 +1,2 @@
+* text=auto eol=lf
+src/content/*.classic.js text eol=lf

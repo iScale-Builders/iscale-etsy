@@ -6,6 +6,12 @@ export function extractListingId(value) {
   return match ? match[1] : null;
 }
 
+export function canonicalListingUrl(value) {
+  const listingId = extractListingId(normalizeEtsyListingUrl(value));
+  if (!listingId) return null;
+  return `https://www.etsy.com/listing/${listingId}`;
+}
+
 export function normalizeEtsyListingUrl(value) {
   if (!value || typeof value !== "string") return null;
 

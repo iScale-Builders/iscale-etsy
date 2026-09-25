@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "iScale Etsy",
-  "version": "1.0.2",
+  "version": "1.2.2",
   "description": "Local-first Etsy research scraper v5 with manual collection, batch jobs, Shop View, and CSV export.",
-  "permissions": ["alarms", "downloads", "sidePanel"],
+  "permissions": ["alarms", "downloads", "sidePanel", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
   "host_permissions": ["https://*.etsy.com/*"],
   "content_security_policy": {
     "extension_pages": "default-src 'self'; img-src 'self' https://*.etsystatic.com https://*.etsy.com data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
@@ -26,14 +27,28 @@
   "side_panel": {
     "default_path": "dashboard.html"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
+      "matches": ["https://*.etsy.com/*"],
+      "js": [
+        "src/content/search-results.classic.js",
+        "src/content/search-box.classic.js",
+        "src/content/shop-page.classic.js",
+        "worker-page.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://*.etsy.com/search*"],
-      "js": ["content.js"],
+      "js": ["src/content/search-results.classic.js", "content.js"],
       "run_at": "document_end"
     },
     {

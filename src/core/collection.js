@@ -1,5 +1,7 @@
 // Pure helpers for the live collection dashboard, toolbar badge, and auto-export.
 
+import { WORKER_DEFAULTS } from "./worker-config.js";
+
 export const DEFAULT_SETTINGS = {
   autoExportEnabled: true, // master on/off toggle for auto-download
   autoExportEvery: 500, // auto-download a full CSV snapshot every N new listings
@@ -18,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   manualFirstReview: false, // opt-in: also extract first-review (opens the reviews
   // modal) when manually browsing a listing page. Off by default so casual
   // browsing isn't interrupted by the reviews popup.
+  ...WORKER_DEFAULTS, // optional backend lane; off until a person enables it
 };
 
 // Is interval auto-run effectively on? Toggle on AND a positive interval. Falls

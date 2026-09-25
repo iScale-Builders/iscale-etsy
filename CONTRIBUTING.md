@@ -72,10 +72,14 @@ claim a check passed unless it actually did.
 
 ## Product Standards
 
-- Keep the extension local-first, with no backend.
-- Do not add accounts, third-party authentication, a remote backend,
-  telemetry, ingest, or new permissions.
-- Keep user data local unless the user explicitly exports it.
+- Keep the extension local-first by default. Optional worker mode must stay
+  off until a person enables it, and it must not ship a backend URL, key, or
+  project id. Worker commands run in a visible window, keep a conservative
+  pace, and stop on a captcha. Do not add a remote job that changes settings
+  or deletes the local collection.
+- Do not add accounts, telemetry, or a bundled remote backend.
+- Keep user data local unless the user explicitly exports it or turns on
+  worker mode and points it at a backend they control.
 - Keep the default scraping pace conservative.
 - Do not present mock or fake data as real.
 

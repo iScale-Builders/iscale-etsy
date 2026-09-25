@@ -79,6 +79,7 @@ let activeJobId = null;
 let jobTimer = null;
 
 document.getElementById("openShop").addEventListener("click", () => send("shop.open"));
+document.getElementById("openWorkerOptions").addEventListener("click", () => chrome.runtime.openOptionsPage());
 els.autoEvery.addEventListener("change", saveAuto);
 els.downloadSubfolder.addEventListener("change", async () => {
   const folder = sanitizeSubfolder(els.downloadSubfolder.value);

@@ -179,6 +179,7 @@
       sendResponse({ error: "unauthorized" });
       return true;
     }
+    if (String(message?.action || "").startsWith("worker.")) return false;
     if (message?.action === "listing.extract") {
       const listing = extractListing(message.input || {});
       if (!listing || listing.found === false) {
